@@ -42,7 +42,10 @@ import {
   isUnmodifiedGlobalReference,
   isUnmodifiedImportMetaUrl,
 } from "./javascriptSemanticAmbientWrites.js";
-import { evaluateSemanticExpression } from "./javascriptSemanticValues.js";
+import {
+  evaluateSemanticExpression,
+  evaluateSemanticExpressionProvenance,
+} from "./javascriptSemanticValues.js";
 import { semanticTopLevelEffectFollowsCapture } from "./javascriptSemanticMutationInitializers.js";
 import {
   semanticFactoryLoaderMemberAt,
@@ -571,8 +574,7 @@ const resolvedRequestTarget = (
   // A toString result is selected before the enclosing request invocation.
   const expression = unwrapJavaScriptExpression(node).node;
   const capture = reference === expression ? site : expression;
-  if (referenceMayHaveChangedAtSite(reference, capture, index))
-    return undefined;
+  if (index.referenceMayHaveChangedAt(capture, reference)) return undefined;
   if (!requestInitializerPrecedesSite(reference, capture, bindings, index))
     return undefined;
   const evaluated = evaluateSemanticExpression(node, bindings);
@@ -587,9 +589,7 @@ const requestInitializerPrecedesSite = (
   bindings: JavaScriptSemanticAnalysisState,
   index: JavaScriptBindingIndex,
 ): boolean => {
-  const effects = index.effectsForReferenceAt(site, reference);
-  if (effects.bindingId === null) return false;
-  const binding = bindings.bindingsById.get(effects.bindingId);
+  const binding = index.bindingForReferenceAt(reference);
   const initializer = semanticStableInitializer(binding, bindings);
   return (
     initializer !== undefined &&
@@ -598,19 +598,6 @@ const requestInitializerPrecedesSite = (
       site,
       bindings.parentsByNode,
     )
-  );
-};
-
-const referenceMayHaveChangedAtSite = (
-  reference: t.Node,
-  site: t.Node,
-  index: JavaScriptBindingIndex,
-): boolean => {
-  const effects = index.effectsForReferenceAt(site, reference);
-  return (
-    !effects.memberEffectsIndexed ||
-    effects.resolution !== "resolved" ||
-    effects.effects.some(({ timing }) => timing !== "after")
   );
 };
 
@@ -652,16 +639,9 @@ const urlObjectRequestTarget = (
     )
       target = unwrapJavaScriptExpression(callee.object).node;
   }
-  if (
-    !t.isIdentifier(target) ||
-    referenceMayHaveChangedAtSite(target, site, index)
-  )
+  if (!t.isIdentifier(target) || index.referenceMayHaveChangedAt(site, target))
     return undefined;
-  const effects = index.effectsForReferenceAt(site, target);
-  const binding =
-    effects.bindingId === null
-      ? undefined
-      : bindings.bindingsById.get(effects.bindingId);
+  const binding = index.bindingForReferenceAt(target);
   if (binding === undefined || seen.has(binding.bindingId)) return undefined;
   seen.add(binding.bindingId);
   const stable = semanticStableInitializer(binding, bindings);
@@ -770,6 +750,10 @@ const inspectStorageCall = (
   first: string | undefined,
   context: FindingContext,
 ): void => {
+  if (name === "Database" || name.endsWith(".Database")) {
+    context.accumulator.pendingSqliteCalls.push({ node, name });
+    return;
+  }
   const receiverFact = context.openReceiverFacts?.get(node.start ?? -1);
   const storage =
     receiverFact === "local" ||
@@ -794,6 +778,53 @@ const inspectStorageCall = (
       location: range(node),
     },
   });
+};
+
+/** Constructor spelling selects a candidate; source provenance owns certainty. */
+export const finishSqliteStorageCalls = (
+  context: FindingContext,
+  bindings: JavaScriptSemanticAnalysisState,
+  index: JavaScriptBindingIndex,
+): void => {
+  for (const { node, name } of context.accumulator.pendingSqliteCalls) {
+    const callee = unwrapJavaScriptExpression(node.callee).node;
+    const provenance = evaluateSemanticExpressionProvenance(callee, bindings);
+    const changed = index.referenceMayHaveChangedAt(node, callee);
+    if (!changed && t.isIdentifier(callee) && provenance.status === "local")
+      continue;
+    const origin =
+      provenance.status === "module" ? provenance.origins[0] : undefined;
+    const path = origin?.importedPath;
+    const imported = origin?.resolutionMode !== "require";
+    const known =
+      !changed &&
+      origin !== undefined &&
+      ((origin.specifier === "better-sqlite3" &&
+        ((origin.resolutionMode === "require" && path?.length === 0) ||
+          (imported && path?.length === 1 && path[0] === "default"))) ||
+        (origin.specifier === "sqlite3" &&
+          ((path?.length === 1 && path[0] === "Database") ||
+            (imported &&
+              path?.length === 2 &&
+              (path[0] === "default" || path[0] === "*") &&
+              path[1] === "Database"))));
+    const first = stringValue(node.arguments[0]);
+    addLocatedFinding(context, {
+      collection: context.accumulator.storage,
+      key: `storage\0sqlite\0${known ? "api" : "candidate"}\0${first ?? ""}`,
+      node,
+      value: {
+        kind: "sqlite",
+        name: first ?? null,
+        mechanism: `call:${name}`,
+        ...(known ? {} : { interpretation: "candidate" as const }),
+        module_key: null,
+        location: range(node),
+      },
+    });
+  }
+  context.accumulator.pendingSqliteCalls.length = 0;
+  context.accumulator.storage.sort((left, right) => left.offset - right.offset);
 };
 
 export const addReference = (
