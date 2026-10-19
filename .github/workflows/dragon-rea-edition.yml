@@ -51,6 +51,4 @@ jobs:
       - name: Check TypeScript and lint
         run: npm run check:fast
       - name: Check format of fork audit files
-        run: |
-          npx --no-install oxfmt scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
-          git diff -- scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
+        run: npx --no-install oxfmt --check scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
