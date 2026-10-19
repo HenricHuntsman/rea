@@ -1,0 +1,51 @@
+name: REA pinned upstream cloud review
+
+# Temporary, scoped to the iPhone review pull request. No secrets or
+# self-hosted runners are used. Never pushes, releases, or merges code.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/rea-cloud-review.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rea-pinned-upstream-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-upstream-smoke:
+    name: Verify pinned upstream source (Linux)
+    if: github.head_ref == 'review/iphone-rea-20261020' && github.event.pull_request.head.repo.full_name == 'HenricHuntsman/rea'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      HUSKY: "0"
+      CI: "true"
+      REA_REVIEW_SHA: d205c528e31897f1f2919b80a4245356b502c703
+    steps:
+      - name: Check out upstream snapshot from draft PR 2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: HenricHuntsman/rea
+          ref: d205c528e31897f1f2919b80a4245356b502c703
+          persist-credentials: false
+      - name: Confirm we are testing the exact reviewed revision
+        run: test "$(git rev-parse HEAD)" = "$REA_REVIEW_SHA"
+      - name: Configure Node.js from source requirements
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Record test environment
+        run: |
+          node --version
+          npm --version
+          git rev-parse HEAD
+      - name: Install pinned dependencies
+        run: npm ci
+      - name: TypeScript and lint smoke checks
+        run: npm run check:fast
+      - name: Portable source tests
+        run: npm run test:fast
