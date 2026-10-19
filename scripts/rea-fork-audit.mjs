@@ -44,7 +44,9 @@ export function collectForkAudit(root = defaultRoot) {
   let sourcePackage = null;
   if (kind(base, "package.json") === "file") {
     try {
-      const data = JSON.parse(readFileSync(resolve(base, "package.json"), "utf8"));
+      const data = JSON.parse(
+        readFileSync(resolve(base, "package.json"), "utf8"),
+      );
       sourcePackage = {
         name: data.name || null,
         version: data.version || null,
@@ -55,14 +57,17 @@ export function collectForkAudit(root = defaultRoot) {
       missing.push("package.json (invalid JSON)");
     }
   }
-  const pinned = kind(base, ".nvmrc") === "file"
-    ? readFileSync(resolve(base, ".nvmrc"), "utf8").trim()
-    : null;
+  const pinned =
+    kind(base, ".nvmrc") === "file"
+      ? readFileSync(resolve(base, ".nvmrc"), "utf8").trim()
+      : null;
   const revision = exec("git", ["rev-parse", "HEAD"], base);
   const git = {
     available: Boolean(revision),
     revision,
-    branch: revision ? exec("git", ["branch", "--show-current"], base) || "(detached)" : null,
+    branch: revision
+      ? exec("git", ["branch", "--show-current"], base) || "(detached)"
+      : null,
   };
   const tools = {
     npm: exec("npm", ["--version"], base) !== null,
@@ -73,9 +78,12 @@ export function collectForkAudit(root = defaultRoot) {
   const warnings = [];
   if (!git.available) warnings.push("Git commit identity could not be checked");
   if (!tools.npm) warnings.push("npm unavailable");
-  if (!tools.python3) warnings.push("Python unavailable; some checks may be skipped");
+  if (!tools.python3)
+    warnings.push("Python unavailable; some checks may be skipped");
   if (process.platform === "linux" && !tools.ps) {
-    warnings.push("ps unavailable on Linux; native REA process checks may fail");
+    warnings.push(
+      "ps unavailable on Linux; native REA process checks may fail",
+    );
   }
   return {
     schemaVersion: 1,
@@ -97,15 +105,22 @@ export function formatForkAudit(report) {
   const lines = [
     "REA fork audit: " + (report.ok ? "PASS" : "FAIL"),
     "Edition: " + report.edition + " " + report.editionVersion,
-    "Upstream package: " + (report.sourcePackage?.name || "unknown") +
-      " " + (report.sourcePackage?.version || "unknown"),
-    "Node: " + report.node.running + "; source pin: " + (report.node.pinned || "none"),
+    "Upstream package: " +
+      (report.sourcePackage?.name || "unknown") +
+      " " +
+      (report.sourcePackage?.version || "unknown"),
+    "Node: " +
+      report.node.running +
+      "; source pin: " +
+      (report.node.pinned || "none"),
     "Revision: " + (report.git.revision || "unavailable"),
     "Required source items found: " +
       (report.requiredFiles.checked - report.requiredFiles.missing.length) +
-      "/" + report.requiredFiles.checked,
+      "/" +
+      report.requiredFiles.checked,
   ];
-  for (const missing of report.requiredFiles.missing) lines.push("MISSING: " + missing);
+  for (const missing of report.requiredFiles.missing)
+    lines.push("MISSING: " + missing);
   for (const warning of report.warnings) lines.push("WARNING: " + warning);
   return lines.join("\n");
 }
@@ -122,16 +137,21 @@ function main() {
     else if (arg === "--strict") strict = true;
     else if (arg === "--root" || arg === "--output") {
       const value = args[++i];
-      if (!value || value.startsWith("--")) throw new Error("Missing value for " + arg);
+      if (!value || value.startsWith("--"))
+        throw new Error("Missing value for " + arg);
       if (arg === "--root") root = value;
       else output = value;
     } else if (arg === "--help") {
-      process.stdout.write("Usage: node scripts/rea-fork-audit.mjs [--json] [--strict] [--root PATH] [--output FILE]\n");
+      process.stdout.write(
+        "Usage: node scripts/rea-fork-audit.mjs [--json] [--strict] [--root PATH] [--output FILE]\n",
+      );
       return;
     } else throw new Error("Unknown argument: " + arg);
   }
   const report = collectForkAudit(root);
-  const result = json ? JSON.stringify(report, null, 2) : formatForkAudit(report);
+  const result = json
+    ? JSON.stringify(report, null, 2)
+    : formatForkAudit(report);
   if (output) {
     writeFileSync(resolve(output), result + "\n");
     process.stdout.write("Saved requested report.\n");
@@ -139,7 +159,10 @@ function main() {
   if (strict && !report.ok) process.exitCode = 1;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   try {
     main();
   } catch (error) {
