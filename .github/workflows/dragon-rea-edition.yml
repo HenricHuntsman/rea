@@ -1,0 +1,54 @@
+name: Dragon REA development edition
+
+on:
+  push:
+    branches: [feature/rea-independent-edition-20261020]
+  pull_request:
+    branches: [sync/upstream-20261018-d205c52]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dragon-rea-edition-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-audit:
+    name: Offline diagnostics and tool tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Test independent fork audit
+        run: node --test scripts/tests/rea-fork-audit.test.mjs
+      - name: Check fork source integrity
+        run: node scripts/rea-fork-audit.mjs --json --strict
+
+  static-checks:
+    name: Locked dependencies, TypeScript and lint
+    needs: offline-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: "true"
+      HUSKY: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check TypeScript and lint
+        run: npm run check:fast
+      - name: Check format of fork audit files
+        run: npx --no-install oxfmt --check scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
