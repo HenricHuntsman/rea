@@ -92,21 +92,9 @@ jobs:
         run: npm ci
       - name: Build REA locally
         run: npm run build
-
-  python-bridges:
-    name: Test portable Python bridge components
-    needs: offline-audit
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      CI: "true"
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Check Python environment
-        run: |
-          python3 --version
-          python3 -m compileall -q bridge/native bridge/mitmproxy
-      - name: Run REA Python bridge tests
+      - name: Confirm generated process prerequisite
+        run: test -f dist/process/OwnedCommand.js
+      - name: Check Python syntax
+        run: python3 -m compileall -q bridge/native bridge/mitmproxy
+      - name: Test Python bridges after build
         run: npm run test:python
