@@ -1,0 +1,11 @@
+{
+  "name": "Dragon REA Development Edition",
+  "version": "0.1.0-dev",
+  "status": "experimental",
+  "upstreamRepository": "https://github.com/morluto/rea",
+  "developmentFork": "https://github.com/HenricHuntsman/rea",
+  "initialReviewedUpstreamCommit": "d205c528e31897f1f2919b80a4245356b502c703",
+  "license": "MIT (retain original author and license notices)",
+  "distribution": "not released",
+  "purpose": "Independent mobile/cloud development, diagnostics and quality improvements"
+}

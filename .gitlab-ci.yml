@@ -1,0 +1,67 @@
+# Independent CI for Dragon REA on GitLab.
+# This is a second provider: no GitHub runner, tokens, or private server required.
+# It is deliberately scoped to the development edition's branch.
+#
+# Light checks run automatically. Long build / integration checks require
+# a manual trigger to respect free-hosted runner quotas.
+
+stages:
+  - preflight
+  - verify
+  - extended
+
+default:
+  image: node:24-bookworm
+  interruptible: true
+
+variables:
+  CI: "true"
+  HUSKY: "0"
+  TURBO_TELEMETRY_DISABLED: "1"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "feature/rea-independent-edition-20261020"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - when: never
+
+fork-audit:
+  stage: preflight
+  timeout: 8m
+  script:
+    - node --version
+    - node --test scripts/tests/rea-fork-audit.test.mjs
+    - node scripts/rea-fork-audit.mjs --json --strict
+
+static-checks:
+  stage: verify
+  timeout: 25m
+  needs:
+    - fork-audit
+  script:
+    - npm ci
+    - npm run check:fast
+    - npx --no-install oxfmt --check scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
+
+portable-tests:
+  stage: extended
+  timeout: 30m
+  when: manual
+  allow_failure: true
+  script:
+    - npm ci
+    - npm run test:fast
+
+package-and-python:
+  stage: extended
+  timeout: 30m
+  when: manual
+  allow_failure: true
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends python3
+  script:
+    - npm ci
+    - npm run build
+    - test -f dist/process/OwnedCommand.js
+    - npm run test:python
