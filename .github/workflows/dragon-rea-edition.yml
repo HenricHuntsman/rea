@@ -52,3 +52,61 @@ jobs:
         run: npm run check:fast
       - name: Check format of fork audit files
         run: npx --no-install oxfmt --check scripts/rea-fork-audit.mjs scripts/tests/rea-fork-audit.test.mjs
+
+  portable-source-tests:
+    name: REA portable source tests
+    needs: static-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      HUSKY: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Execute REA portable source suite
+        run: npm run test:fast
+
+  package-build:
+    name: Build REA package without publishing
+    needs: static-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      HUSKY: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build REA locally
+        run: npm run build
+
+  python-bridges:
+    name: Test portable Python bridge components
+    needs: offline-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Check Python environment
+        run: |
+          python3 --version
+          python3 -m compileall -q bridge/native bridge/mitmproxy
+      - name: Run REA Python bridge tests
+        run: npm run test:python
