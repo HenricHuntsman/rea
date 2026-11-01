@@ -25,8 +25,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { execFileOutput } from "../dist/process/ExecFileOutput.js";
+import { inspectKunaInstallation } from "../dist/kuna/KunaInstallation.js";
 import { ArtifactResourceScope } from "../dist/artifacts/ArtifactResourceScope.js";
+import { AnalysisCleanupLease } from "../dist/artifacts/AnalysisCleanupLease.js";
 import { requireMcpOperationResult } from "./lib/mcp-verifier-results.mjs";
 import { verifyKunaReferences } from "./lib/kuna-reference-verifier.mjs";
 import {
@@ -71,11 +72,15 @@ if (values["compare-ghidra"]) {
   );
 }
 const run = createVerifierRun();
-const fileCloseScope = new ArtifactResourceScope();
-const fileCloseResources = {
+const inspectionResources = new ArtifactResourceScope();
+const resourceScope = {
   retain: (owner, resource) =>
-    fileCloseScope.retain({ kind: "file-handle", resource, handle: owner }),
-  run: (operation) => fileCloseScope.run(operation),
+    inspectionResources.retain({
+      kind: "lease",
+      resource,
+      lease: AnalysisCleanupLease.forCloseOwner(owner, resource),
+    }),
+  run: (operation) => inspectionResources.run(operation),
 };
 const workspace = await mkdtemp(join(tmpdir(), "rea-kuna-lane-"));
 const cacheRoot = join(workspace, "cache");
@@ -110,7 +115,9 @@ __attribute__((noinline)) int rea_classify(int c) {
 }
 int main(int argc, char **argv) {
   if (argc < 2) return 2;
-  printf("%u %d\n", rea_checksum((const unsigned char *)argv[1], strlen(argv[1])),
+  size_t length = strlen(argv[1]);
+  printf("%u %u %d\n", rea_checksum((const unsigned char *)argv[1], length),
+         rea_checksum((const unsigned char *)argv[1], length ? length - 1 : 0),
          rea_classify(argv[1][0]));
   return 0;
 }
@@ -277,8 +284,12 @@ const quality = (text) => ({
 const verifyKuna = async (
   path,
   functions,
-  expectedCaller,
-  expectedStrings = [],
+  {
+    expectedCaller,
+    expectedStrings = [],
+    verifyNamedTrace = false,
+    minimumTraceReferences = {},
+  } = {},
 ) => {
   const sha256 = createHash("sha256")
     .update(await readFile(path))
@@ -292,7 +303,6 @@ const verifyKuna = async (
         call: cold.call,
         cacheRoot,
         expectedStrings,
-        fileCloseResources,
         nativeStrings: () =>
           nativeKunaStrings({
             executable: kuna,
@@ -300,7 +310,7 @@ const verifyKuna = async (
             workspace,
             binary: path,
             retain: (owner) => retainedNative.add(owner),
-            fileCloseResources,
+            resourceScope,
           }),
       }),
     });
@@ -316,6 +326,8 @@ const verifyKuna = async (
         name,
         address,
         expectedCaller,
+        verifyNamedTrace,
+        minimumTraceReferences: minimumTraceReferences[name],
         nativeIncoming: (targetAddress) =>
           nativeKunaIncomingSites({
             executable: kuna,
@@ -324,7 +336,7 @@ const verifyKuna = async (
             binary: path,
             address: targetAddress,
             retain: (outcome) => retainedNative.add(outcome),
-            fileCloseResources,
+            resourceScope,
           }),
       });
       const pseudocode = await cold.call("procedure_pseudo_code", {
@@ -365,6 +377,7 @@ const verifyKuna = async (
       );
       const dossier = await cold.call("analyze_function", {
         procedure: address,
+        detail: "complete",
       });
       assert.deepEqual(
         dossier.structured.relationship_coverage,
@@ -492,15 +505,17 @@ const verifyVariant = async ({ flavor, directory, symbols }, variant) => {
 
 const results = [];
 const failures = [];
-let fileResourcesClean = true;
+let inspectionResourcesClean = true;
 try {
-  kunaVersion = (
-    await execFileOutput(kuna, ["--version"], {
-      timeout: 10_000,
-      maxBuffer: 64 * 1024,
-      stopSignal: "SIGTERM",
-    })
-  ).stdout.trim();
+  const installation = await inspectKunaInstallation(
+    { REA_KUNA_COMMAND: kuna, REA_KUNA_CACHE_DIR: cacheRoot },
+    { resourceScope },
+  );
+  assert.ok(
+    installation.ok,
+    installation.ok ? undefined : installation.error.reason,
+  );
+  kunaVersion = `kuna ${installation.value.version}`;
   let callerPairs = [];
   if (values.targets !== undefined) {
     const names = (values.functions ?? "").split(",").filter(Boolean);
@@ -542,10 +557,12 @@ try {
   for (const binary of [built, stripped])
     results.push({
       binary: binary.slice(workspace.length + 1),
-      kuna: await verifyKuna(binary, [...fixtureFunctions], fixtureMain, [
-        "＿φ( °-°)/ REA unicode marker",
-        "REA wide marker",
-      ]),
+      kuna: await verifyKuna(binary, [...fixtureFunctions], {
+        expectedCaller: fixtureMain,
+        expectedStrings: ["＿φ( °-°)/ REA unicode marker", "REA wide marker"],
+        verifyNamedTrace: binary === built,
+        minimumTraceReferences: { rea_checksum: 2 },
+      }),
     });
 
   // Caller-built matrix.
@@ -566,14 +583,16 @@ for (const retained of [...retainedNative]) {
   }
 }
 try {
-  await fileCloseScope.close();
+  await inspectionResources.close();
 } catch (cause) {
-  fileResourcesClean = false;
+  inspectionResourcesClean = false;
   failures.push(cause);
 }
 const lifecycle = await completeVerifierRun(run);
 let cleanupComplete =
-  pendingServers.size === 0 && retainedNative.size === 0 && fileResourcesClean;
+  pendingServers.size === 0 &&
+  retainedNative.size === 0 &&
+  inspectionResourcesClean;
 try {
   assertVerifierCleanupComplete(lifecycle.process_lineage);
 } catch (cause) {

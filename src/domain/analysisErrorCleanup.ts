@@ -1,6 +1,10 @@
 import { ProviderAdapterError } from "./providerAdapterError.js";
-import { projectAnalysisError } from "./analysisErrorProjection.js";
+import {
+  projectAnalysisError,
+  projectAnalysisErrorWithoutCapturedOutput,
+} from "./analysisErrorProjection.js";
 import type { AnalysisError } from "./analysisErrorBase.js";
+import { analysisErrorRemediationAction } from "./analysisErrorPresentation.js";
 
 /** Preserve the original lifecycle failure alongside incomplete cleanup. */
 export const analysisErrorWithCleanupFailure = (
@@ -13,13 +17,15 @@ export const analysisErrorWithCleanupFailure = (
     cleanup instanceof ProviderAdapterError ? cleanup.providerId : "rea",
     operation,
     {
+      cleanupPrimary: primary,
       cause: new AggregateError(
         [primary, cleanup],
         "Analysis failed and cleanup remains incomplete.",
         { cause: primary },
       ),
       userMessage: projectAnalysisError(primary).message,
-      remediationAction: projected.remediation.action,
+      // A retry offer belongs to the owner of the composed resources, if any.
+      remediationAction: analysisErrorRemediationAction(cleanup),
       ...(primary.capturedOutput === undefined
         ? {}
         : { capturedOutput: primary.capturedOutput }),
@@ -27,7 +33,7 @@ export const analysisErrorWithCleanupFailure = (
         ? {}
         : { partialObservation: primary.partialObservation }),
       cleanup: {
-        reason: projected.message,
+        reason: cleanup.cleanup?.reason ?? projected.message,
         resources: [
           ...new Set([
             ...(primary.cleanupIncomplete ? primary.cleanupResources : []),
@@ -36,7 +42,10 @@ export const analysisErrorWithCleanupFailure = (
         ],
       },
       diagnostics: {
-        primary_error: projectAnalysisError(primary),
+        primary_error:
+          primary.capturedOutput === undefined
+            ? projectAnalysisError(primary)
+            : projectAnalysisErrorWithoutCapturedOutput(primary),
         cleanup_error: projected,
       },
     },
