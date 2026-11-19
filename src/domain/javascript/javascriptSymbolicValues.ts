@@ -47,7 +47,11 @@ export type SymbolicValue = (
       readonly kind: "literal";
       readonly value: string | number | boolean | null | undefined;
     }
-  | { readonly kind: "external"; readonly path: readonly string[] }
+  | {
+      readonly kind: "external";
+      readonly path: readonly string[];
+      readonly loaderAuthority?: "candidate";
+    }
   | {
       readonly kind: "object";
       readonly node: t.ObjectExpression;
@@ -57,6 +61,8 @@ export type SymbolicValue = (
       readonly kind: "namespace";
       readonly bindingId: string;
       readonly environment: SymbolicEnvironment;
+      /** Namespace identity does not establish the mutable root's runtime value. */
+      readonly runtimeValueUnknown?: true;
     }
   | {
       readonly kind: "loader";
@@ -93,6 +99,7 @@ export const symbolicUnion = (
   return unique.length === 1 ? unique[0]! : { kind: "union", values: unique };
 };
 export const symbolicTruth = (value: SymbolicValue): boolean | undefined => {
+  if (value.kind === "namespace" && value.runtimeValueUnknown) return undefined;
   if (value.kind === "union") {
     const choices = value.values.map(symbolicTruth);
     return choices.length > 0 &&

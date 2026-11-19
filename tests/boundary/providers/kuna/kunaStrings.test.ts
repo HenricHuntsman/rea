@@ -1,4 +1,4 @@
-import { expect, it as test, vi } from "vitest";
+import { expect, it as test } from "vitest";
 import { readKunaConfiguration } from "../../../../src/kuna/KunaConfiguration.js";
 import { KUNA_DIAGNOSTIC_BYTES } from "../../../../src/kuna/KunaLimits.js";
 import { projectAnalysisError } from "../../../../src/domain/analysisErrorProjection.js";
@@ -6,6 +6,7 @@ import { ProviderCleanupError } from "../../../../src/domain/providerCleanupErro
 
 import { fakeKunaCalls, setFakeKunaBehavior } from "./fakeKuna.js";
 import { run, session, unprovenCleanupLauncher } from "./kunaSessionFixture.js";
+import { waitFor } from "../../../support/testWait.js";
 
 const it = test.skipIf(process.platform === "win32");
 const scans = async (kuna: string) =>
@@ -84,24 +85,85 @@ it("shares a typed string scan across concurrent searches and exact address read
     expect(commands.filter((command) => command !== "--version")).toEqual([
       "strings",
     ]);
-    expect(
-      await client.execute("list_strings", { address: "invalid" }),
-    ).toMatchObject({ ok: false, error: { _tag: "AnalysisInputError" } });
+    for (const address of ["invalid", "0x1ffffffffffffffff"])
+      expect(await client.execute("list_strings", { address })).toMatchObject({
+        ok: false,
+        error: {
+          _tag: "AnalysisInputError",
+          issues: [{ path: ["address"], reason: "invalid_format" }],
+        },
+      });
     expect(
       await client.execute("search_strings", { pattern: "[", mode: "regex" }),
-    ).toMatchObject({ ok: false, error: { _tag: "AnalysisInputError" } });
+    ).toMatchObject({
+      ok: false,
+      error: {
+        _tag: "AnalysisInputError",
+        issues: [{ path: ["pattern"], reason: "invalid_format" }],
+      },
+    });
     expect((await run(client, "list_strings")).result).toHaveLength(2);
   } finally {
     expect(await client.close()).toEqual({ ok: true, value: null });
   }
 });
 
-it.each(["not-json", "miscounted"] as const)(
-  "does not publish or cache a %s inventory",
-  async (strings) => {
-    const { open, kuna } = await session("rea-kuna-strings-invalid-", {
-      strings,
+it("returns every encoding at an exact address in numeric inventory order", async () => {
+  const { open, kuna } = await session("rea-kuna-string-address-", {
+    stringRows: [
+      { address: 0x100, text: "later" },
+      { address: 0x10, text: "hello", encoding: "utf8" },
+      { address: 0xf, text: "first" },
+      { address: 0x10, text: "hello", encoding: "utf16" },
+      { address: 0x10, text: "hello" },
+    ],
+  });
+  const client = open();
+  try {
+    const exact = await run(client, "list_strings", { address: "0X000010" });
+    expect(exact.result).toMatchObject([
+      { address: "0x10", string: { encoding: "ascii" } },
+      { address: "0x10", string: { encoding: "utf16" } },
+      { address: "0x10", string: { encoding: "utf8" } },
+    ]);
+    expect(exact.rawResult).toMatchObject({
+      strings: { inventory_count: 5, selected_count: 3 },
     });
+    const complete = await run(client, "list_strings");
+    expect(complete.result).toMatchObject([
+      { address: "0xf" },
+      { address: "0x10" },
+      { address: "0x10" },
+      { address: "0x10" },
+      { address: "0x100" },
+    ]);
+    for (const address of ["0x0", "0x11", "0xffffffffffffffff"])
+      expect((await run(client, "list_strings", { address })).result).toEqual(
+        [],
+      );
+    expect(await scans(kuna)).toHaveLength(1);
+  } finally {
+    expect(await client.close()).toEqual({ ok: true, value: null });
+  }
+});
+
+it.each([
+  ["not-json", { strings: "not-json" }],
+  ["miscounted", { strings: "miscounted" }],
+  [
+    "duplicate identity",
+    {
+      stringRows: [
+        { address: 0x30, text: "hello" },
+        { address: 0x10, text: "other" },
+        { address: 0x30, text: "hello" },
+      ],
+    },
+  ],
+] as const)(
+  "does not publish or cache a %s inventory",
+  async (_label, behavior) => {
+    const { open, kuna } = await session("rea-kuna-strings-invalid-", behavior);
     const client = open();
     try {
       expect(
@@ -147,7 +209,8 @@ it("stops Kuna at the first contradictory row instead of awaiting the rest", asy
   );
   const client = open();
   try {
-    const started = Date.now();
+    // Awaiting the hung scan would end at the 60 s project deadline with a
+    // deadline error; only a stop at the rejected row reports the output.
     expect(
       await client.execute("search_strings", { pattern: "fixture" }),
     ).toMatchObject({
@@ -158,7 +221,6 @@ it("stops Kuna at the first contradictory row instead of awaiting the rest", asy
         diagnostics: { producer_operation: "kuna:strings" },
       },
     });
-    expect(Date.now() - started).toBeLessThan(30_000);
     await setFakeKunaBehavior(kuna, {});
     expect((await run(client, "list_strings")).result).toHaveLength(2);
     expect(await scans(kuna)).toHaveLength(2);
@@ -180,7 +242,7 @@ it("cancels one waiter without stopping the shared scan, and rebuilds in a fresh
       { signal: abort.signal },
     );
     const survivor = first.execute("search_strings", { pattern: "fixture" });
-    await vi.waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
+    await waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
     abort.abort();
     expect(await cancelled).toMatchObject({
       ok: false,
@@ -212,7 +274,7 @@ it("drains a cancelled last scan before retrying", async () => {
       {},
       { signal: abort.signal },
     );
-    await vi.waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
+    await waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
     abort.abort();
     expect(await pending).toMatchObject({
       ok: false,
@@ -242,7 +304,7 @@ it("retains metadata admission until a string process stop is proven", async () 
       {},
       { signal: abort.signal },
     );
-    await vi.waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
+    await waitFor(async () => expect(await scans(kuna)).toHaveLength(1));
     abort.abort();
     expect(await pending).toMatchObject({
       ok: false,
@@ -367,8 +429,22 @@ it.each([
             exit_code: 7,
             stderr: expect.stringContaining("fixture string scan failed"),
           });
-        if (mode === "hang")
+        if (mode === "hang") {
           expect(result.error).toMatchObject({ timeoutMs: 500 });
+          // Each waiter keeps the producer's setting and recovery.
+          expect(projectAnalysisError(result.error)).toMatchObject({
+            code: "provider_timeout",
+            details: {
+              timeout_ms: 500,
+              limit: {
+                setting: "kuna.project_timeout_ms",
+                effective_value: 500,
+                update_mode: "runtime",
+                pending_restart: false,
+              },
+            },
+          });
+        }
         if (mode === "oversize") {
           expect(projectAnalysisError(result.error)).toMatchObject({
             code: "resource_constraint",

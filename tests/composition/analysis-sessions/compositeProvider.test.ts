@@ -12,8 +12,8 @@ import type {
   AnalysisProvider,
   CapabilityDescriptor,
   ProviderIdentity,
-} from "../../../src/application/AnalysisProvider.js";
-import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
+} from "../../../src/ports/AnalysisProvider.js";
+import { createAnalysisExecution } from "../../../src/ports/AnalysisProvider.js";
 import type { BinaryTarget } from "../../../src/domain/binaryTargetTypes.js";
 import { ok } from "../../../src/domain/result.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
@@ -86,7 +86,7 @@ describe("composite analysis provider", () => {
       ok: true,
     });
 
-    expect(session.status()).toMatchObject({
+    expect(await session.status()).toMatchObject({
       analysis_run: {
         process_lineage: {
           status: "snapshots",
@@ -183,7 +183,7 @@ describe("composite provider health status", () => {
     expect((await session.execute("procedure_info", {})).ok).toBe(true);
     failed = true;
 
-    expect(session.status()).toMatchObject({
+    expect(await session.status()).toMatchObject({
       provider_operation_health: {
         state: "exited",
         stage: "connection",
